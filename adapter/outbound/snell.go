@@ -19,6 +19,7 @@ type Snell struct {
 	psk        []byte
 	pool       *snell.Pool
 	obfsOption *simpleObfsOption
+	identity   bool
 	version    int
 	reuse      bool
 }
@@ -31,7 +32,8 @@ type SnellOption struct {
 	Psk      string         `proxy:"psk"`
 	UDP      bool           `proxy:"udp,omitempty"`
 	Version  int            `proxy:"version,omitempty"`
-	Reuse    bool           `proxy:"reuse,omitempty"`
+	Reuse    *bool          `proxy:"reuse,omitempty"`
+	Identity bool           `proxy:"identity,omitempty"`
 	ObfsOpts map[string]any `proxy:"obfs-opts,omitempty"`
 }
 
@@ -40,6 +42,7 @@ type streamOption struct {
 	version    int
 	addr       string
 	obfsOption *simpleObfsOption
+	identity   bool
 }
 
 func snellStreamConn(c net.Conn, option streamOption) *snell.Snell {
@@ -50,12 +53,15 @@ func snellStreamConn(c net.Conn, option streamOption) *snell.Snell {
 		_, port, _ := net.SplitHostPort(option.addr)
 		c = obfs.NewHTTPObfs(c, option.obfsOption.Host, port)
 	}
+	if option.identity && option.version == snell.Version4 {
+		return snell.StreamConnWithIdentity(c, option.psk, option.version)
+	}
 	return snell.StreamConn(c, option.psk, option.version)
 }
 
 // StreamConnContext implements C.ProxyAdapter
 func (s *Snell) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.Metadata) (net.Conn, error) {
-	c = snellStreamConn(c, streamOption{s.psk, s.version, s.addr, s.obfsOption})
+	c = snellStreamConn(c, streamOption{psk: s.psk, version: s.version, addr: s.addr, obfsOption: s.obfsOption, identity: s.identity})
 	err := s.writeHeaderContext(ctx, c, metadata)
 	return c, err
 }
@@ -142,6 +148,13 @@ func (s *Snell) ProxyInfo() C.ProxyInfo {
 	return info
 }
 
+func defaultSnellReuse(version int, option *bool) bool {
+	if version == snell.Version4 {
+		return option == nil || *option
+	}
+	return version == snell.Version2
+}
+
 func NewSnell(option SnellOption) (*Snell, error) {
 	addr := net.JoinHostPort(option.Server, strconv.Itoa(option.Port))
 	psk := []byte(option.Psk)
@@ -167,7 +180,7 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		// Snell v5 servers are backward-compatible with v4 clients.
 		option.Version = snell.Version4
 	}
-	reuse := option.Version == snell.Version2 || (option.Version == snell.Version4 && option.Reuse)
+	reuse := defaultSnellReuse(option.Version, option.Reuse)
 	switch option.Version {
 	case snell.Version1, snell.Version2:
 		if option.UDP {
@@ -194,6 +207,7 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		option:     &option,
 		psk:        psk,
 		obfsOption: obfsOption,
+		identity:   option.Identity,
 		version:    option.Version,
 		reuse:      reuse,
 	}
@@ -206,7 +220,7 @@ func NewSnell(option SnellOption) (*Snell, error) {
 				return nil, err
 			}
 
-			return snellStreamConn(c, streamOption{psk, option.Version, addr, obfsOption}), nil
+			return snellStreamConn(c, streamOption{psk: psk, version: option.Version, addr: addr, obfsOption: obfsOption, identity: option.Identity}), nil
 		})
 	}
 	return s, nil
