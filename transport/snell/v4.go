@@ -28,13 +28,14 @@ const (
 
 type v4Conn struct {
 	net.Conn
-	psk []byte
-	r   *v4Reader
-	w   *v4Writer
+	psk      []byte
+	identity []byte
+	r        *v4Reader
+	w        *v4Writer
 }
 
-func newV4Conn(conn net.Conn, psk []byte) *v4Conn {
-	return &v4Conn{Conn: conn, psk: psk}
+func newV4Conn(conn net.Conn, psk []byte, identity []byte) *v4Conn {
+	return &v4Conn{Conn: conn, psk: psk, identity: append([]byte(nil), identity...)}
 }
 
 func (c *v4Conn) initReader() error {
@@ -52,7 +53,7 @@ func (c *v4Conn) initReader() error {
 }
 
 func (c *v4Conn) initWriter() error {
-	w, err := newV4Writer(c.Conn, c.psk)
+	w, err := newV4Writer(c.Conn, c.psk, c.identity)
 	if err != nil {
 		return err
 	}
@@ -229,6 +230,7 @@ func (r *v4Reader) readFrame() ([]byte, error) {
 type v4Writer struct {
 	io.Writer
 	aead                 cipher.AEAD
+	identity             []byte
 	nonce                [v4NonceSize]byte
 	salt                 [v4SaltSize]byte
 	saltSent             bool
@@ -238,7 +240,7 @@ type v4Writer struct {
 	mux                  sync.Mutex
 }
 
-func newV4Writer(w io.Writer, psk []byte) (*v4Writer, error) {
+func newV4Writer(w io.Writer, psk []byte, identity []byte) (*v4Writer, error) {
 	var salt [v4SaltSize]byte
 	if _, err := io.ReadFull(cryptorand.Reader, salt[:]); err != nil {
 		return nil, err
@@ -255,6 +257,7 @@ func newV4Writer(w io.Writer, psk []byte) (*v4Writer, error) {
 	return &v4Writer{
 		Writer:               w,
 		aead:                 aead,
+		identity:             append([]byte(nil), identity...),
 		salt:                 salt,
 		initialPaddingLength: uint16(v4InitialPaddingMin + paddingDelta),
 	}, nil
@@ -348,6 +351,10 @@ func (w *v4Writer) writeFrame(payload []byte, paddingLength int) error {
 	frame := make([]byte, 0, frameLength)
 	if !w.saltSent {
 		frame = append(frame, w.salt[:]...)
+		if len(w.identity) == IdentityHeaderLength {
+			frame = append(frame, identityWireMagic...)
+			frame = append(frame, w.identity...)
+		}
 		w.saltSent = true
 	}
 	frame = append(frame, headerCipher...)
