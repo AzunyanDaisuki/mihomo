@@ -193,6 +193,10 @@ func hasSnellShadowTLSOption(option SnellOption) bool {
 		option.ShadowTLSALPN != nil
 }
 
+func requiresSnellV4Identity(obfsMode string, shadowTLSOption *shadowtls.ShadowTLSOption) bool {
+	return obfsMode == "anytls" || isSnellECHTLSMode(obfsMode) || shadowTLSOption != nil
+}
+
 func snellStreamConn(c net.Conn, option streamOption) *snell.Snell {
 	switch option.obfsOption.Mode {
 	case "tls":
@@ -372,13 +376,13 @@ func NewSnell(option SnellOption) (*Snell, error) {
 
 	// backward compatible
 	if option.Version == 0 {
-		if isSnellECHTLSMode(obfsOption.Mode) || shadowTLSOption != nil {
+		if requiresSnellV4Identity(obfsOption.Mode, shadowTLSOption) {
 			option.Version = snell.Version4
 		} else {
 			option.Version = snell.DefaultSnellVersion
 		}
 	}
-	if (isSnellECHTLSMode(obfsOption.Mode) || shadowTLSOption != nil) && option.Version == snell.Version4 {
+	if requiresSnellV4Identity(obfsOption.Mode, shadowTLSOption) && option.Version == snell.Version4 {
 		option.Identity = true
 	}
 	if option.Version == snell.Version5 {

@@ -312,7 +312,7 @@ func ParseUDPRequest(packet []byte) (UDPRequest, error) {
 		return UDPRequest{}, errors.New("snell invalid UDP request")
 	}
 	if hostLen := int(packet[1]); hostLen != 0 {
-		if len(packet) <= 2+hostLen+2 {
+		if len(packet) < 2+hostLen+2 {
 			return UDPRequest{}, errors.New("snell invalid UDP domain request")
 		}
 		offset := 2 + hostLen
