@@ -361,6 +361,19 @@ func TestWritePacketResponseUsesSocksAddrParser(t *testing.T) {
 	}
 }
 
+func TestParseUDPRequestAllowsEmptyDomainPayload(t *testing.T) {
+	packet := append([]byte{CommondUDPForward, byte(len("example.com"))}, []byte("example.com")...)
+	packet = append(packet, 0, 53)
+
+	req, err := ParseUDPRequest(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Host != "example.com" || req.Port != 53 || len(req.Payload) != 0 {
+		t.Fatalf("unexpected request: %#v", req)
+	}
+}
+
 type bufferConn struct {
 	bytes.Buffer
 }
