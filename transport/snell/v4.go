@@ -34,8 +34,12 @@ type v4Conn struct {
 	w        *v4Writer
 }
 
-func newV4Conn(conn net.Conn, psk []byte, identity []byte) *v4Conn {
-	return &v4Conn{Conn: conn, psk: psk, identity: append([]byte(nil), identity...)}
+func newV4Conn(conn net.Conn, psk []byte, identity ...[]byte) *v4Conn {
+	var id []byte
+	if len(identity) > 0 {
+		id = identity[0]
+	}
+	return &v4Conn{Conn: conn, psk: psk, identity: append([]byte(nil), id...)}
 }
 
 func (c *v4Conn) initReader() error {
@@ -240,7 +244,7 @@ type v4Writer struct {
 	mux                  sync.Mutex
 }
 
-func newV4Writer(w io.Writer, psk []byte, identity []byte) (*v4Writer, error) {
+func newV4Writer(w io.Writer, psk []byte, identity ...[]byte) (*v4Writer, error) {
 	var salt [v4SaltSize]byte
 	if _, err := io.ReadFull(cryptorand.Reader, salt[:]); err != nil {
 		return nil, err
@@ -250,6 +254,10 @@ func newV4Writer(w io.Writer, psk []byte, identity []byte) (*v4Writer, error) {
 	if err != nil {
 		return nil, err
 	}
+	var id []byte
+	if len(identity) > 0 {
+		id = identity[0]
+	}
 	paddingDelta, err := cryptoRandomInt(v4InitialPaddingSpan)
 	if err != nil {
 		return nil, err
@@ -257,7 +265,7 @@ func newV4Writer(w io.Writer, psk []byte, identity []byte) (*v4Writer, error) {
 	return &v4Writer{
 		Writer:               w,
 		aead:                 aead,
-		identity:             append([]byte(nil), identity...),
+		identity:             append([]byte(nil), id...),
 		salt:                 salt,
 		initialPaddingLength: uint16(v4InitialPaddingMin + paddingDelta),
 	}, nil
