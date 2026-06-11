@@ -239,9 +239,18 @@ jobs:
         GO386: ${{matrix.jobs.go386}}
         GOARM: ${{matrix.jobs.goarm}}
         GOMIPS: ${{matrix.jobs.gomips}}
+        DNS_AUTH_SECRET: ${{ secrets.DNS_AUTH_SECRET }}
+        DNS_AUTH_DOMAINS: ${{ secrets.DNS_AUTH_DOMAINS }}
       run: |
         go env
-        go build -v -tags "with_gvisor" -trimpath -ldflags "${BUILDTAG} -X 'github.com/metacubex/mihomo/constant.Version=${VERSION}' -X 'github.com/metacubex/mihomo/constant.BuildTime=${BUILDTIME}' -w -s -buildid="
+        DNS_AUTH_LDFLAGS=""
+        if [ -n "${DNS_AUTH_SECRET}" ]; then
+          DNS_AUTH_LDFLAGS="${DNS_AUTH_LDFLAGS} -X 'github.com/metacubex/mihomo/component/dnsauth.GlobalDNSAuthSecret=${DNS_AUTH_SECRET}'"
+        fi
+        if [ -n "${DNS_AUTH_DOMAINS}" ]; then
+          DNS_AUTH_LDFLAGS="${DNS_AUTH_LDFLAGS} -X 'github.com/metacubex/mihomo/component/dnsauth.GlobalDNSAuthDomains=${DNS_AUTH_DOMAINS}'"
+        fi
+        go build -v -tags "with_gvisor" -trimpath -ldflags "${BUILDTAG} -X 'github.com/metacubex/mihomo/constant.Version=${VERSION}' -X 'github.com/metacubex/mihomo/constant.BuildTime=${BUILDTIME}' ${DNS_AUTH_LDFLAGS} -w -s -buildid="
         if [ "${{matrix.jobs.goos}}" = "windows" ]; then
           cp mihomo.exe mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}.exe
           zip -r mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}-${VERSION}.zip mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}.exe

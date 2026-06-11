@@ -12,8 +12,16 @@ VERSION=$(shell git rev-parse --short HEAD)
 endif
 
 BUILDTIME=$(shell date -u)
+DNS_AUTH_LDFLAGS=
+ifneq ($(strip $(DNS_AUTH_SECRET)),)
+DNS_AUTH_LDFLAGS += -X "github.com/metacubex/mihomo/component/dnsauth.GlobalDNSAuthSecret=$(DNS_AUTH_SECRET)"
+endif
+ifneq ($(strip $(DNS_AUTH_DOMAINS)),)
+DNS_AUTH_LDFLAGS += -X "github.com/metacubex/mihomo/component/dnsauth.GlobalDNSAuthDomains=$(DNS_AUTH_DOMAINS)"
+endif
 GOBUILD=CGO_ENABLED=0 go build -tags with_gvisor -trimpath -ldflags '-X "github.com/metacubex/mihomo/constant.Version=$(VERSION)" \
 		-X "github.com/metacubex/mihomo/constant.BuildTime=$(BUILDTIME)" \
+		$(DNS_AUTH_LDFLAGS) \
 		-w -s -buildid='
 
 PLATFORM_LIST = \
