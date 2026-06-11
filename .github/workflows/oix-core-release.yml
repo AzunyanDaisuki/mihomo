@@ -1,0 +1,108 @@
+name: OIX Core Release
+
+on:
+  push:
+    tags:
+      - "oix-mihomo-alpha-*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.output }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            goamd64: v2
+            output: linux-amd64-v2
+          - goarch: arm64
+            goamd64: ""
+            output: linux-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.1"
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          GOAMD64: ${{ matrix.goamd64 }}
+          CGO_ENABLED: 0
+          VERSION: ${{ github.ref_name }}
+          DNS_AUTH_SECRET: ${{ secrets.DNS_AUTH_SECRET }}
+          DNS_AUTH_DOMAINS: ${{ secrets.DNS_AUTH_DOMAINS }}
+        shell: bash
+        run: |
+          mkdir -p dist
+
+          ldflags="-X github.com/metacubex/mihomo/constant.Version=${VERSION}"
+          ldflags="${ldflags} -X github.com/metacubex/mihomo/constant.BuildTime=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          if [ -n "${DNS_AUTH_SECRET}" ]; then
+            ldflags="${ldflags} -X github.com/metacubex/mihomo/component/dnsauth.GlobalDNSAuthSecret=${DNS_AUTH_SECRET}"
+          fi
+          if [ -n "${DNS_AUTH_DOMAINS}" ]; then
+            ldflags="${ldflags} -X github.com/metacubex/mihomo/component/dnsauth.GlobalDNSAuthDomains=${DNS_AUTH_DOMAINS}"
+          fi
+          ldflags="${ldflags} -w -s -buildid="
+
+          output="mihomo-${{ matrix.output }}-${VERSION}"
+          go build -tags with_gvisor -trimpath -ldflags "${ldflags}" -o "dist/${output}" .
+          zip -j "dist/${output}.zip" "dist/${output}"
+          rm "dist/${output}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mihomo-${{ matrix.output }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum *.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: OIX mihomo alpha ${{ github.ref_name }}
+          prerelease: true
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS
+          body: |
+            OIX modified mihomo core build from the Meta branch.
+
+            Commit: ${{ github.sha }}
+
+            Included targets:
+            - Linux amd64 v2
+            - Linux arm64
+
+            This build embeds DNS_AUTH_SECRET and DNS_AUTH_DOMAINS from GitHub Actions secrets.
