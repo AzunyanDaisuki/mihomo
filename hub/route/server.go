@@ -2,6 +2,7 @@ package route
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"net"
@@ -67,6 +68,7 @@ type Config struct {
 	TLSAddr        string
 	UnixAddr       string
 	PipeAddr       string
+	RoutingMark    int
 	Secret         string
 	Certificate    string
 	PrivateKey     string
@@ -172,7 +174,9 @@ func start(cfg *Config) {
 
 	// handle addr
 	if len(cfg.Addr) > 0 {
-		l, err := inbound.Listen("tcp", cfg.Addr)
+		lc := inbound.NewListenConfig()
+		lc.SetRouteMark(cfg.RoutingMark)
+		l, err := lc.Listen(context.Background(), "tcp", cfg.Addr)
 		if err != nil {
 			log.Errorln("External controller listen error: %s", err)
 			return
@@ -202,7 +206,9 @@ func startTLS(cfg *Config) {
 			return
 		}
 
-		l, err := inbound.Listen("tcp", cfg.TLSAddr)
+		lc := inbound.NewListenConfig()
+		lc.SetRouteMark(cfg.RoutingMark)
+		l, err := lc.Listen(context.Background(), "tcp", cfg.TLSAddr)
 		if err != nil {
 			log.Errorln("External controller tls listen error: %s", err)
 			return
@@ -274,7 +280,9 @@ func startUnix(cfg *Config) {
 		// should be used to delete the socket file prior to calling bind with the same path.
 		_ = syscall.Unlink(addr)
 
-		l, err := inbound.Listen("unix", addr)
+		lc := inbound.NewListenConfig()
+		lc.SetRouteMark(0) // don't set route mark for unix socket
+		l, err := lc.Listen(context.Background(), "unix", addr)
 		if err != nil {
 			log.Errorln("External controller unix listen error: %s", err)
 			return
