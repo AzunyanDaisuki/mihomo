@@ -48,27 +48,11 @@ type SnellOption struct {
 	Psk      string         `proxy:"psk"`
 	UDP      bool           `proxy:"udp,omitempty"`
 	Version  int            `proxy:"version,omitempty"`
-	Reuse    *bool          `proxy:"reuse,omitempty"`
+	Reuse    bool           `proxy:"reuse,omitempty"`
 	Identity bool           `proxy:"identity,omitempty"`
 	ObfsOpts map[string]any `proxy:"obfs-opts,omitempty"`
 
-	ShadowTLSPassword       string   `proxy:"shadow-tls-password,omitempty"`
-	ShadowTLSSNI            string   `proxy:"shadow-tls-sni,omitempty"`
-	ShadowTLSVersion        int      `proxy:"shadow-tls-version,omitempty"`
-	ShadowTLSSkipCertVerify bool     `proxy:"shadow-tls-skip-cert-verify,omitempty"`
-	ShadowTLSFingerprint    string   `proxy:"shadow-tls-fingerprint,omitempty"`
-	ShadowTLSCertificate    string   `proxy:"shadow-tls-certificate,omitempty"`
-	ShadowTLSPrivateKey     string   `proxy:"shadow-tls-private-key,omitempty"`
-	ShadowTLSALPN           []string `proxy:"shadow-tls-alpn,omitempty"`
-	ClientFingerprint       string   `proxy:"client-fingerprint,omitempty"`
-}
-
-type streamOption struct {
-	psk        []byte
-	version    int
-	addr       string
-	obfsOption *snellObfsOption
-	identity   bool
+	ClientFingerprint string `proxy:"client-fingerprint,omitempty"`
 }
 
 type snellObfsOption struct {
@@ -77,6 +61,8 @@ type snellObfsOption struct {
 	SNI               string            `obfs:"sni,omitempty"`
 	Path              string            `obfs:"path,omitempty"`
 	Password          string            `obfs:"password,omitempty"`
+	Version           int               `obfs:"version,omitempty"`
+	ALPN              []string          `obfs:"alpn,omitempty"`
 	TLS               bool              `obfs:"tls,omitempty"`
 	ECHConfig         string            `obfs:"ech-config,omitempty"`
 	ECHConfigFile     string            `obfs:"ech-config-file,omitempty"`
@@ -142,21 +128,14 @@ func snellECHTLSConfig(obfsOption *snellObfsOption) (*ech.Config, error) {
 	}, nil
 }
 
-func snellShadowTLSOption(option SnellOption) (*shadowtls.ShadowTLSOption, error) {
-	if !hasSnellShadowTLSOption(option) {
-		return nil, nil
-	}
-
-	if option.ShadowTLSPassword == "" {
+func snellShadowTLSObfsOption(option SnellOption, obfsOption *snellObfsOption) (*shadowtls.ShadowTLSOption, error) {
+	if obfsOption.Password == "" {
 		return nil, fmt.Errorf("shadow-tls password is empty")
 	}
-	if option.ShadowTLSSNI == "" {
-		return nil, fmt.Errorf("shadow-tls sni is empty")
-	}
 
-	version := option.ShadowTLSVersion
+	version := obfsOption.Version
 	if version == 0 {
-		version = 3
+		version = 2
 	}
 	switch version {
 	case 1, 2, 3:
@@ -164,57 +143,60 @@ func snellShadowTLSOption(option SnellOption) (*shadowtls.ShadowTLSOption, error
 		return nil, fmt.Errorf("shadow-tls version error: %d", version)
 	}
 
-	alpn := option.ShadowTLSALPN
+	alpn := obfsOption.ALPN
 	if alpn == nil {
 		alpn = shadowtls.DefaultALPN
 	}
+	host := obfsOption.Host
+	if host == "" {
+		host = "bing.com"
+	}
 
 	return &shadowtls.ShadowTLSOption{
-		Password:          option.ShadowTLSPassword,
-		Host:              option.ShadowTLSSNI,
-		Fingerprint:       option.ShadowTLSFingerprint,
-		Certificate:       option.ShadowTLSCertificate,
-		PrivateKey:        option.ShadowTLSPrivateKey,
+		Password:          obfsOption.Password,
+		Host:              host,
+		Fingerprint:       obfsOption.Fingerprint,
+		Certificate:       obfsOption.Certificate,
+		PrivateKey:        obfsOption.PrivateKey,
 		ClientFingerprint: option.ClientFingerprint,
-		SkipCertVerify:    option.ShadowTLSSkipCertVerify,
+		SkipCertVerify:    obfsOption.SkipCertVerify,
 		Version:           version,
 		ALPN:              alpn,
 	}, nil
 }
 
-func hasSnellShadowTLSOption(option SnellOption) bool {
-	return option.ShadowTLSPassword != "" ||
-		option.ShadowTLSSNI != "" ||
-		option.ShadowTLSVersion != 0 ||
-		option.ShadowTLSSkipCertVerify ||
-		option.ShadowTLSFingerprint != "" ||
-		option.ShadowTLSCertificate != "" ||
-		option.ShadowTLSPrivateKey != "" ||
-		option.ShadowTLSALPN != nil
+func requiresSnellV4Identity(obfsMode string) bool {
+	return obfsMode == "anytls" ||
+		isSnellECHTLSMode(obfsMode)
 }
 
-func requiresSnellV4Identity(obfsMode string, shadowTLSOption *shadowtls.ShadowTLSOption) bool {
-	return obfsMode == "anytls" || isSnellECHTLSMode(obfsMode) || shadowTLSOption != nil
-}
-
-func snellStreamConn(c net.Conn, option streamOption) *snell.Snell {
-	switch option.obfsOption.Mode {
+func (s *Snell) streamConnContext(ctx context.Context, c net.Conn) (*snell.Snell, error) {
+	var err error
+	switch s.obfsOption.Mode {
 	case "tls":
-		c = obfs.NewTLSObfs(c, option.obfsOption.Host)
+		c = obfs.NewTLSObfs(c, s.obfsOption.Host)
 	case "http":
-		_, port, _ := net.SplitHostPort(option.addr)
-		c = obfs.NewHTTPObfs(c, option.obfsOption.Host, port)
+		_, port, _ := net.SplitHostPort(s.addr)
+		c = obfs.NewHTTPObfs(c, s.obfsOption.Host, port)
+	case shadowtls.Mode:
+		c, err = shadowtls.NewShadowTLS(ctx, c, s.shadowTLS)
+		if err != nil {
+			return nil, err
+		}
 	}
-	if option.identity && option.version == snell.Version4 {
-		return snell.StreamConnWithIdentity(c, option.psk, option.version)
+	if s.identity && s.version == snell.Version4 {
+		return snell.StreamConnWithIdentity(c, s.psk, s.version), nil
 	}
-	return snell.StreamConn(c, option.psk, option.version)
+	return snell.StreamConn(c, s.psk, s.version), nil
 }
 
 // StreamConnContext implements C.ProxyAdapter
 func (s *Snell) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.Metadata) (net.Conn, error) {
-	c = snellStreamConn(c, streamOption{psk: s.psk, version: s.version, addr: s.addr, obfsOption: s.obfsOption, identity: s.identity})
-	err := s.writeHeaderContext(ctx, c, metadata)
+	c, err := s.streamConnContext(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	err = s.writeHeaderContext(ctx, c, metadata)
 	return c, err
 }
 
@@ -248,6 +230,9 @@ func (s *Snell) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn
 		if err = s.writeHeaderContext(ctx, c, metadata); err != nil {
 			_ = c.Close()
 			return nil, err
+		}
+		if pc, ok := c.(*snell.PoolConn); ok {
+			pc.MarkReusable()
 		}
 		return NewConn(c, s), err
 	}
@@ -285,7 +270,7 @@ func (s *Snell) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 	}
 
 	pc := snell.PacketConn(c)
-	return newPacketConn(pc, s), nil
+	return NewPacketConn(pc, s), nil
 }
 
 func (s *Snell) dialSnellTransport(ctx context.Context) (net.Conn, error) {
@@ -304,14 +289,6 @@ func (s *Snell) dialSnellTransport(ctx context.Context) (net.Conn, error) {
 		}
 		c = obfsConn
 	}
-	if s.shadowTLS != nil {
-		shadowConn, err := shadowtls.NewShadowTLS(ctx, c, s.shadowTLS)
-		if err != nil {
-			_ = c.Close()
-			return nil, fmt.Errorf("%s shadow-tls connect error: %w", s.addr, err)
-		}
-		c = shadowConn
-	}
 	return c, nil
 }
 
@@ -327,13 +304,6 @@ func (s *Snell) ProxyInfo() C.ProxyInfo {
 	return info
 }
 
-func defaultSnellReuse(version int, option *bool) bool {
-	if version == snell.Version4 {
-		return option == nil || *option
-	}
-	return version == snell.Version2
-}
-
 func NewSnell(option SnellOption) (*Snell, error) {
 	addr := net.JoinHostPort(option.Server, strconv.Itoa(option.Port))
 	psk := []byte(option.Psk)
@@ -343,17 +313,17 @@ func NewSnell(option SnellOption) (*Snell, error) {
 	if err := decoder.Decode(option.ObfsOpts, obfsOption); err != nil {
 		return nil, fmt.Errorf("snell %s initialize obfs error: %w", addr, err)
 	}
-	shadowTLSOption, err := snellShadowTLSOption(option)
-	if err != nil {
-		return nil, fmt.Errorf("snell %s initialize shadow-tls error: %w", addr, err)
-	}
+	var shadowTLSOption *shadowtls.ShadowTLSOption
 	switch obfsOption.Mode {
 	case "tls", "http", "anytls", "ech-tls", "":
+	case shadowtls.Mode:
+		var err error
+		shadowTLSOption, err = snellShadowTLSObfsOption(option, obfsOption)
+		if err != nil {
+			return nil, fmt.Errorf("snell %s initialize shadow-tls-plugin error: %w", addr, err)
+		}
 	default:
 		return nil, fmt.Errorf("snell %s obfs mode error: %s", addr, obfsOption.Mode)
-	}
-	if shadowTLSOption != nil && obfsOption.Mode != "" {
-		return nil, fmt.Errorf("snell %s shadow-tls and obfs mode %s are mutually exclusive", addr, obfsOption.Mode)
 	}
 	if obfsOption.Host == "" && (obfsOption.Mode == "tls" || obfsOption.Mode == "http") {
 		obfsOption.Host = "bing.com"
@@ -376,20 +346,20 @@ func NewSnell(option SnellOption) (*Snell, error) {
 
 	// backward compatible
 	if option.Version == 0 {
-		if requiresSnellV4Identity(obfsOption.Mode, shadowTLSOption) {
+		if requiresSnellV4Identity(obfsOption.Mode) {
 			option.Version = snell.Version4
 		} else {
 			option.Version = snell.DefaultSnellVersion
 		}
 	}
-	if requiresSnellV4Identity(obfsOption.Mode, shadowTLSOption) && option.Version == snell.Version4 {
+	if requiresSnellV4Identity(obfsOption.Mode) && option.Version == snell.Version4 {
 		option.Identity = true
 	}
 	if option.Version == snell.Version5 {
 		// Snell v5 servers are backward-compatible with v4 clients.
 		option.Version = snell.Version4
 	}
-	reuse := defaultSnellReuse(option.Version, option.Reuse)
+	reuse := option.Version == snell.Version2 || (option.Version == snell.Version4 && option.Reuse)
 	switch option.Version {
 	case snell.Version1, snell.Version2:
 		if option.UDP {
@@ -472,7 +442,7 @@ func NewSnell(option SnellOption) (*Snell, error) {
 				return nil, err
 			}
 
-			return snellStreamConn(c, streamOption{psk: psk, version: option.Version, addr: addr, obfsOption: obfsOption, identity: option.Identity}), nil
+			return s.streamConnContext(ctx, c)
 		})
 	}
 	return s, nil

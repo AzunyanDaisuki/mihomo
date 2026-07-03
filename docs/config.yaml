@@ -83,6 +83,9 @@ external-controller-unix: mihomo.sock
 # ！！！注意： 从Windows namedpipe访问api接口不会验证secret， 如果开启请自行保证安全问题 ！！！
 external-controller-pipe: \\.\pipe\mihomo
 
+# 为 external-controller 和 external-controller-tls 的监听socket设置routing-mark（仅支持linux）
+external-controller-routing-mark: 0
+
 # tcp-concurrent: true # TCP 并发连接所有 IP, 将使用最快握手的 TCP
 
 # 配置 WEB UI 目录，使用 http://{{external-controller}}/ui 访问
@@ -335,18 +338,20 @@ dns:
 
   # 配置 fallback 使用条件
   # fallback-filter:
-  #   geoip: true # 配置是否使用 geoip
-  #   geoip-code: CN # 当 nameserver 域名的 IP 查询 geoip 库为 CN 时，不使用 fallback 中的 DNS 查询结果
-  #   配置强制 fallback，优先于 IP 判断，具体分类自行查看 geosite 库
-  #   geosite:
-  #     - gfw
-  #   如果不匹配 ipcidr 则使用 nameservers 中的结果
-  #   ipcidr:
+  #   geoip: true    # 配置是否使用 geoip
+  #   geoip-code: CN # 当 nameserver 解析出域名的 IP 查询 geoip 库为 CN 时， 使用 nameserver 中的 DNS 查询结果
+  #   ipcidr:        # 当 nameserver 解析出域名的 IP 匹配 ipcidr 时，使用 fallback 中的 DNS 查询结果
   #     - 240.0.0.0/4
-  #   domain:
+  #     - 0.0.0.0/32
+  #     - 127.0.0.1/32
+  #     - 100.64.0.0/10
+  #   domain:        # 匹配到这些域名，会直接使用 fallback 解析，不去使用 nameserver
   #     - '+.google.com'
   #     - '+.facebook.com'
   #     - '+.youtube.com'
+  #   geosite:       # 匹配到这些域名，会直接使用 fallback 解析，不去使用 nameserver（已废弃，请使用 nameserver-policy）
+  #     - gfw
+  # fallback-lazy-query: false # 默认值为 false ，如果为 true 会先判断来自 nameserver 的结果是否满足 fallback-filter 后再发起查询
 
   # 配置查询域名使用的 DNS 服务器
   nameserver-policy:
@@ -403,8 +408,9 @@ proxies: # socks5
     # udp: true # support UDP on version 3/4/5
     # reuse: false # v4/5 only
     # obfs-opts:
-    # mode: http # or tls
-    # host: bing.com
+    #   mode: http # or tls/shadow-tls
+    #   host: bing.com
+    # ech-tls example:
     # obfs-opts:
     #   mode: ech-tls
     #   sni: tunnel.example.com
@@ -414,6 +420,22 @@ proxies: # socks5
     #   # ca-file: ./ca.pem
     #   # insecure: false
     #   # client-fingerprint: chrome
+
+  - name: "snell-shadow-tls"
+    type: snell
+    server: server
+    port: 44046
+    psk: yourpsk
+    # version: 4 # support 1/2/3/4/5
+    # udp: true # support UDP on version 3/4/5
+    # reuse: false # v4/5 only
+    # client-fingerprint: chrome
+    obfs-opts:
+      mode: shadow-tls
+      host: bing.com
+      password: "shadow_tls_password"
+      version: 2 # support 1/2/3
+      alpn: ["h2","http/1.1"]
 
   # Shadowsocks
   # cipher支持:
@@ -1208,6 +1230,9 @@ proxies: # socks5
     #   00000000000000000000000000000000
     #   ...
     #   -----END OpenVPN Static key V1-----
+    # peer-info: # 透传给服务端的 peer-info 键值对，追加在内置 IV_VER/IV_PROTO/IV_CIPHERS 之后；用于服务端基于 peer-info 做准入决策
+    #   IV_HWADDR: "52:54:00:ff:72:87"
+    #   UV_DEVICE_ID: "laptop-001"
     # ping: 10 # 默认值为 0
     # ping-restart: 60 # 默认值为 0
     # mtu: 1500
@@ -1232,6 +1257,21 @@ proxies: # socks5
     # dialer-proxy: "ss1"
     # remote-dns-resolve: true # 强制 dns 远程解析，默认值为 false
     # dns: [ 1.1.1.1, 8.8.8.8 ] # 仅在 remote-dns-resolve 为 true 时生效
+    # congestion-controller: bbr # 默认不开启
+
+  # masque-h3-l4proxy
+  - name: "masque-h3-l4proxy"
+    type: masque
+    server: 162.159.198.1
+    port: 443
+    private-key: MHcCAQEEILI1eOtnbEIh89Fj4yNDuFR6UjayCKI3NdLl3DhetimWoAoGCCqGSM49AwEHoUQDQgAEgyXrE8v+hHsHy3ewSb3WcRjYgCrM9T9hiE0Uv6k2DZ1+4kefrDT9v1Q/8wdRigTf6t6gGNUV8W+IUMdrfUt+9g==
+    public-key: MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIaU7MToJm9NKp8YfGxR6r+/h4mcG7SxI8tsW8OR1A5tv/zCzVbCRRh2t87/kxnP6lAy0lkr7qYwu+ox+k3dr6w==
+    udp: false # 目前 l4proxy 模式不支持 udp
+    network: h3-l4proxy
+    # 一个出站代理的标识。当值不为空时，将使用指定的 proxy 发出连接
+    # dialer-proxy: "ss1"
+    # remote-dns-resolve: true # 强制 dns 远程解析，默认值为 false
+    # dns: [ tls://1.1.1.1, tls://1.0.0.1 ] # 仅在 remote-dns-resolve 为 true 时生效
     # congestion-controller: bbr # 默认不开启
 
   # masque-h2
@@ -1399,23 +1439,17 @@ proxies: # socks5
   - name: "dns-out"
     type: dns
 
+  - name: "rematch"
+    type: rematch
+    target-rematch-name: "rematch1" # 如果填写则覆盖原始 metadata 中的 rematch-name（可用REMATCH-NAME规则匹配）
+    target-sub-rule: "sub-rule1" # 如果填写则接下来会直接用指定的 sub-rule 匹配，如果名字不存在或为空会回退到主rules
+
   # 配置指定 interface-name 和 fwmark 的 DIRECT
   - name: en1-direct
     type: direct
     interface-name: en1
     routing-mark: 6667
 proxy-groups:
-  # 代理链，目前 relay 可以支持 udp 的只有 vmess/vless/trojan/ss/ssr/tuic
-  # wireguard 目前不支持在 relay 中使用，请使用 proxy 中的 dialer-proxy 配置项
-  # Traffic: mihomo <-> http <-> vmess <-> ss1 <-> ss2 <-> Internet
-  - name: "relay"
-    type: relay
-    proxies:
-      - http
-      - vmess
-      - ss1
-      - ss2
-
   # url-test 将按照 url 测试结果使用延迟最低节点
   - name: "auto"
     type: url-test
@@ -1459,6 +1493,7 @@ proxy-groups:
       - ss2
       - vmess1
       - auto
+    # default-selected: ss1 # 默认选择的节点（该项为空或者设置的节点名不存在时，默认选择组中第一个节点）
 
   - name: UseProvider
     type: select
@@ -1468,7 +1503,7 @@ proxy-groups:
     proxies:
       - Proxy
       - DIRECT
-    # empty-fallback: COMPATIBLE # 设置当组为空时的回退proxy
+    # empty-fallback: COMPATIBLE # 设置当组为空时的回退proxy（这里不支持填写代理组，只支持填写proxy名称）
 
 # Mihomo 格式的节点或支持 *ray 的分享格式
 proxy-providers:
@@ -1631,6 +1666,7 @@ listeners:
     type: socks
     port: 10808 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     #listen: 0.0.0.0 # 默认监听 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理
     # udp: false # 默认 true
@@ -1655,6 +1691,7 @@ listeners:
     type: http
     port: 10809 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
     # users: # 如果不填写users项，则遵从全局authentication设置，如果填写会忽略全局设置, 如想跳过该入站的验证可填写 users: []
@@ -1678,6 +1715,7 @@ listeners:
     type: mixed #  HTTP(S) 和 SOCKS 代理混合
     port: 10810 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
     # udp: false # 默认 true
@@ -1717,6 +1755,7 @@ listeners:
     type: shadowsocks
     port: 10813 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
     password: vlmpIPSyHH6f4S8WVPdRIHIlzmB+GIRfoH3aNJ/t9Gg=
@@ -1764,12 +1803,22 @@ listeners:
     type: snell
     port: 10815 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     psk: your-password
     version: 4 # 仅支持 4/5
     udp: true # UDP over TCP tunnel，默认 true
     # obfs-opts:
     #   mode: http # 可选：http / tls
     #   host: bing.com
+    # shadow-tls:
+    #   enable: false # 设置为true时开启
+    #   version: 3 # 支持v1/v2/v3
+    #   password: password # v2设置项
+    #   users: # v3设置项
+    #     - name: 1
+    #       password: password
+    #   handshake:
+    #     dest: test.com:443
     # rule: sub-rule-name1
     # proxy: proxy
 
@@ -1777,6 +1826,7 @@ listeners:
     type: vmess
     port: 10814 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
     users:
@@ -1821,6 +1871,7 @@ listeners:
     type: tuic
     port: 10815 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
     # token:    # tuicV4 填写（可以同时填写 users）
@@ -1852,6 +1903,7 @@ listeners:
     type: tunnel
     port: 10816 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
     network: [tcp, udp]
@@ -1861,6 +1913,7 @@ listeners:
     type: vless
     port: 10817 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
     users:
@@ -1944,6 +1997,7 @@ listeners:
     type: anytls
     port: 10818 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     users:
       username1: password1
       username2: password2
@@ -1968,6 +2022,7 @@ listeners:
     type: mieru
     port: 10818 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     transport: TCP # 支持 TCP 或者 UDP
     users:
       username1: password1
@@ -1981,6 +2036,7 @@ listeners:
     type: sudoku
     port: 8443 # 仅支持单端口
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     key: "<server_key>" # 如果你使用sudoku生成的ED25519密钥对，此处是密钥对中的公钥，当然，你也可以仅仅使用任意uuid充当key
     aead-method: chacha20-poly1305 # 可选：chacha20-poly1305、aes-128-gcm、none（不建议；none 不提供 AEAD 保护）
     padding-min: 1 # 最小填充率（0-100）
@@ -2004,6 +2060,7 @@ listeners:
     type: trojan
     port: 10819 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
     users:
@@ -2053,6 +2110,7 @@ listeners:
     type: hysteria2
     port: 10820 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
     users:
@@ -2105,6 +2163,7 @@ listeners:
     type: hysteria2-realm
     port: 10820 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     token: public # hysteria2入站和出站通过 `Authorization: Bearer <token>` 出示的 Bearer 令牌。
     max-realms: 65536 # maximum total realms (0 = unlimited)
     max-realms-per-ip: 4 # maximum realms per client IP (0 = unlimited)
@@ -2129,6 +2188,7 @@ listeners:
     type: trusttunnel
     port: 10821 # 支持使用ports格式，例如200,302 or 200,204,401-429,501-503
     listen: 0.0.0.0
+    # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
     users:
